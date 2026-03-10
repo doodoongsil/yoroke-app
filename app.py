@@ -323,20 +323,22 @@ def normalize_food_name(food_input):
     return "", text, False
 
 
-def show_flash_message():
-    if st.session_state.get("flash_message"):
-        level = st.session_state.get("flash_level", "success")
-        message = st.session_state.get("flash_message", "")
+def show_menu_flash(menu_name):
+    flash_menu = st.session_state.get("flash_menu")
+    flash_message = st.session_state.get("flash_message")
+    flash_level = st.session_state.get("flash_level", "success")
 
-        if level == "success":
-            st.success(message)
-        elif level == "warning":
-            st.warning(message)
-        elif level == "error":
-            st.error(message)
+    if flash_menu == menu_name and flash_message:
+        if flash_level == "success":
+            st.success(flash_message)
+        elif flash_level == "warning":
+            st.warning(flash_message)
+        elif flash_level == "error":
+            st.error(flash_message)
         else:
-            st.info(message)
+            st.info(flash_message)
 
+        st.session_state.flash_menu = None
         st.session_state.flash_message = None
         st.session_state.flash_level = "success"
 
@@ -352,6 +354,9 @@ if "edit_mode" not in st.session_state:
 if "edit_id" not in st.session_state:
     st.session_state.edit_id = None
 
+if "flash_menu" not in st.session_state:
+    st.session_state.flash_menu = None
+
 if "flash_message" not in st.session_state:
     st.session_state.flash_message = None
 
@@ -362,8 +367,6 @@ st.title("요로케 테스트 앱")
 st.write("신장결석·요로결석 예방을 위한 테스트용 앱입니다.")
 st.write("아직은 작은 기능만 넣은 첫 버전입니다.")
 
-show_flash_message()
-
 menu = st.radio(
     "원하는 메뉴를 선택하세요",
     ["홈", "오늘 체크", "음식 확인", "기록 보기"]
@@ -371,6 +374,8 @@ menu = st.radio(
 
 if menu == "홈":
     st.subheader("홈")
+    show_menu_flash("홈")
+
     st.write("요로케에 오신 것을 환영합니다.")
     st.write("이 앱은 생활 습관을 간단히 기록하고 확인해보는 테스트용 버전입니다.")
 
@@ -419,6 +424,7 @@ if menu == "홈":
 
 elif menu == "오늘 체크":
     st.subheader("오늘 체크")
+    show_menu_flash("오늘 체크")
 
     if today_done:
         st.success("오늘은 이미 기록이 있습니다. 추가로 저장하면 오늘 기록이 하나 더 쌓입니다.")
@@ -451,12 +457,15 @@ elif menu == "오늘 체크":
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             water, pain, urine, urine_count, sweat, salty_food, memo
         )
+        st.session_state.flash_menu = "오늘 체크"
         st.session_state.flash_message = "기록이 SQLite DB에 저장되었습니다."
         st.session_state.flash_level = "success"
         st.rerun()
 
 elif menu == "음식 확인":
     st.subheader("음식 확인")
+    show_menu_flash("음식 확인")
+
     st.write("음식 이름을 입력하면 테스트용 기준으로 간단한 안내를 보여줍니다.")
     st.write("이제 비슷한 음식 이름도 어느 정도 알아듣습니다.")
 
@@ -484,6 +493,7 @@ elif menu == "음식 확인":
 
 elif menu == "기록 보기":
     st.subheader("기록 보기")
+    show_menu_flash("기록 보기")
 
     if len(df_all) > 0:
         st.dataframe(df_all, use_container_width=True)
@@ -547,6 +557,7 @@ elif menu == "기록 보기":
                 if st.button("수정 내용 저장"):
                     update_record(st.session_state.edit_id, edit_water, edit_pain, edit_urine, edit_urine_count, edit_sweat, edit_salty, edit_memo)
                     st.session_state.edit_mode = False
+                    st.session_state.flash_menu = "기록 보기"
                     st.session_state.flash_message = "기록이 수정되었습니다."
                     st.session_state.flash_level = "success"
                     st.rerun()
@@ -567,6 +578,7 @@ elif menu == "기록 보기":
         if st.button("선택한 기록 삭제"):
             delete_record(int(delete_id))
             st.session_state.edit_mode = False
+            st.session_state.flash_menu = "기록 보기"
             st.session_state.flash_message = "선택한 기록이 삭제되었습니다."
             st.session_state.flash_level = "success"
             st.rerun()
