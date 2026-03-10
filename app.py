@@ -323,6 +323,24 @@ def normalize_food_name(food_input):
     return "", text, False
 
 
+def show_flash_message():
+    if st.session_state.get("flash_message"):
+        level = st.session_state.get("flash_level", "success")
+        message = st.session_state.get("flash_message", "")
+
+        if level == "success":
+            st.success(message)
+        elif level == "warning":
+            st.warning(message)
+        elif level == "error":
+            st.error(message)
+        else:
+            st.info(message)
+
+        st.session_state.flash_message = None
+        st.session_state.flash_level = "success"
+
+
 init_db()
 df_all = load_data()
 today_done = has_today_record(df_all)
@@ -334,9 +352,17 @@ if "edit_mode" not in st.session_state:
 if "edit_id" not in st.session_state:
     st.session_state.edit_id = None
 
+if "flash_message" not in st.session_state:
+    st.session_state.flash_message = None
+
+if "flash_level" not in st.session_state:
+    st.session_state.flash_level = "success"
+
 st.title("요로케 테스트 앱")
 st.write("신장결석·요로결석 예방을 위한 테스트용 앱입니다.")
 st.write("아직은 작은 기능만 넣은 첫 버전입니다.")
+
+show_flash_message()
 
 menu = st.radio(
     "원하는 메뉴를 선택하세요",
@@ -425,7 +451,8 @@ elif menu == "오늘 체크":
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             water, pain, urine, urine_count, sweat, salty_food, memo
         )
-        st.success("기록이 SQLite DB에 저장되었습니다.")
+        st.session_state.flash_message = "기록이 SQLite DB에 저장되었습니다."
+        st.session_state.flash_level = "success"
         st.rerun()
 
 elif menu == "음식 확인":
@@ -520,7 +547,8 @@ elif menu == "기록 보기":
                 if st.button("수정 내용 저장"):
                     update_record(st.session_state.edit_id, edit_water, edit_pain, edit_urine, edit_urine_count, edit_sweat, edit_salty, edit_memo)
                     st.session_state.edit_mode = False
-                    st.success("기록이 수정되었습니다.")
+                    st.session_state.flash_message = "기록이 수정되었습니다."
+                    st.session_state.flash_level = "success"
                     st.rerun()
 
                 if st.button("수정 취소"):
@@ -539,7 +567,8 @@ elif menu == "기록 보기":
         if st.button("선택한 기록 삭제"):
             delete_record(int(delete_id))
             st.session_state.edit_mode = False
-            st.success("선택한 기록이 삭제되었습니다.")
+            st.session_state.flash_message = "선택한 기록이 삭제되었습니다."
+            st.session_state.flash_level = "success"
             st.rerun()
     else:
-        st.info("아직 저장된 기록이 없습니다. 먼저 오늘 체크에서 기록을 저장해보세요.")
+        st.info("아직 저장된 기록이 없습니다. 먼저 오늘 체크에서 기록해보세요.")
