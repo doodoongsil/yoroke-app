@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
-import os
+import sqlite3
 from datetime import datetime
 
 st.set_page_config(page_title="요로케", page_icon="💧", layout="wide")
 
-FILE_NAME = "records.csv"
+DB_NAME = "records.db"
 DAILY_WATER_GOAL = 8
 
 food_db = {
@@ -162,6 +162,137 @@ food_alias = {
 }
 
 
+def get_conn():
+    return sqlite3.connect(DB_NAME, check_same_thread=False)
+
+
+def init_db():
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            기록시각 TEXT,
+            물섭취컵 INTEGER,
+            통증여부 TEXT,
+            소변상태 TEXT,
+            소변횟수 INTEGER,
+            땀배출 TEXT,
+            짠음식섭취 TEXT,
+            메모 TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def load_data():
+    conn = get_conn()
+    df = pd.read_sql_query("SELECT * FROM records ORDER BY 기록시각 DESC", conn)
+    conn.close()
+
+    if len(df) == 0:
+        return pd.DataFrame(columns=[
+            "id", "기록시각", "물섭취컵", "통증여부", "소변상태",
+            "소변횟수", "땀배출", "짠음식섭취", "메모"
+        ])
+    return df
+
+
+def insert_record(record_time, water, pain, urine, urine_count, sweat, salty_food, memo):
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO records (
+            기록시각, 물섭취컵, 통증여부, 소변상태,
+            소변횟수, 땀배출, 짠음식섭취, 메모
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (record_time, water, pain, urine, urine_count, sweat, salty_food, memo))
+    conn.commit()
+    conn.close()
+
+
+def update_record(record_id, water, pain, urine, urine_count, sweat, salty_food, memo):
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE records
+        SET 물섭취컵 = ?, 통증여부 = ?, 소변상태 = ?, 소변횟수 = ?,
+            땀배출 = ?, 짠음식섭취 = ?, 메모 = ?
+        WHERE id = ?
+    """, (water, pain, urine, urine_count, sweat, salty_food, memo, record_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_record(record_id):
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM records WHERE id = ?", (record_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_today_string():
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def has_today_record(df):
+    if len(df) == 0:
+        return False
+    record_dates = df["기록시각"].astype(str).str[:10]
+    return get_today_string() in record_dates.values
+
+
+def get_latest_records(df, count=5):
+    return df.head(count)
+
+
+def get_recent_water_chart_data(df, count=7):
+    if len(df) == 0:
+        return pd.DataFrame()
+
+    chart_df = df.head(count).copy()
+    chart_df = chart_df.iloc[::-1].reset_index(drop=True)
+    chart_df["표시날짜"] = pd.to_datetime(chart_df["기록시각"], errors="coerce").dt.strftime("%m-%d %H:%M")
+    chart_df["표시날짜"] = chart_df["표시날짜"].fillna("날짜없음")
+    chart_df["물섭취컵"] = pd.to_numeric(chart_df["물섭취컵"], errors="coerce").fillna(0)
+
+    return chart_df[["표시날짜", "물섭취컵"]].set_index("표시날짜")
+
+
+def get_pain_chart_data(df):
+    if len(df) == 0:
+        return pd.DataFrame()
+
+    pain_order = ["없음", "조금 있음", "심함"]
+    pain_counts = df["통증여부"].astype(str).value_counts()
+
+    rows = []
+    for pain in pain_order:
+        rows.append({"통증여부": pain, "횟수": int(pain_counts.get(pain, 0))})
+
+    return pd.DataFrame(rows).set_index("통증여부")
+
+
+def get_today_latest_record(df):
+    if len(df) == 0:
+        return None
+
+    df_copy = df.copy()
+    df_copy["날짜"] = df_copy["기록시각"].astype(str).str[:10]
+    today_df = df_copy[df_copy["날짜"] == get_today_string()].copy()
+
+    if len(today_df) == 0:
+        return None
+
+    today_df["정렬용시각"] = pd.to_datetime(today_df["기록시각"], errors="coerce")
+    today_df = today_df.sort_values(by="정렬용시각", ascending=False)
+
+    return today_df.iloc[0]
+
+
 def normalize_food_name(food_input):
     text = str(food_input).strip()
     if text == "":
@@ -192,120 +323,16 @@ def normalize_food_name(food_input):
     return "", text, False
 
 
-def load_data():
-    if os.path.exists(FILE_NAME):
-        df = pd.read_csv(FILE_NAME)
-        return df
+init_db()
+df_all = load_data()
+today_done = has_today_record(df_all)
+today_record = get_today_latest_record(df_all)
 
-    return pd.DataFrame(columns=[
-        "기록시각", "물섭취(컵)", "통증여부", "소변상태",
-        "소변횟수", "땀배출", "짠음식섭취", "메모"
-    ])
+if "edit_mode" not in st.session_state:
+    st.session_state.edit_mode = False
 
-
-def ensure_columns(df):
-    needed_columns = [
-        "기록시각", "물섭취(컵)", "통증여부", "소변상태",
-        "소변횟수", "땀배출", "짠음식섭취", "메모"
-    ]
-
-    for col in needed_columns:
-        if col not in df.columns:
-            if col == "소변횟수":
-                df[col] = 0
-            elif col == "땀배출":
-                df[col] = "보통"
-            elif col == "짠음식섭취":
-                df[col] = "아니오"
-            else:
-                df[col] = ""
-
-    return df
-
-
-def save_data(df):
-    df.to_csv(FILE_NAME, index=False, encoding="utf-8-sig")
-
-
-def get_today_string():
-    return datetime.now().strftime("%Y-%m-%d")
-
-
-def has_today_record(df):
-    if len(df) == 0 or "기록시각" not in df.columns:
-        return False
-
-    record_dates = df["기록시각"].astype(str).str[:10]
-    return get_today_string() in record_dates.values
-
-
-def get_sorted_df_with_index(df):
-    if len(df) == 0:
-        empty_df = df.copy()
-        empty_df["원본인덱스"] = []
-        return empty_df
-
-    df_copy = df.copy()
-    df_copy["원본인덱스"] = df_copy.index
-    df_copy["정렬용시각"] = pd.to_datetime(df_copy["기록시각"], errors="coerce")
-    df_copy = df_copy.sort_values(by="정렬용시각", ascending=False)
-    df_copy = df_copy.drop(columns=["정렬용시각"])
-    df_copy = df_copy.reset_index(drop=True)
-    return df_copy
-
-
-def get_latest_records(df, count=5):
-    sorted_df = get_sorted_df_with_index(df)
-    if "원본인덱스" in sorted_df.columns:
-        sorted_df = sorted_df.drop(columns=["원본인덱스"])
-    return sorted_df.head(count)
-
-
-def get_recent_water_chart_data(df, count=7):
-    if len(df) == 0:
-        return pd.DataFrame()
-
-    chart_df = get_sorted_df_with_index(df).head(count).copy()
-    chart_df = chart_df.iloc[::-1].reset_index(drop=True)
-
-    chart_df["표시날짜"] = pd.to_datetime(chart_df["기록시각"], errors="coerce").dt.strftime("%m-%d %H:%M")
-    chart_df["표시날짜"] = chart_df["표시날짜"].fillna("날짜없음")
-    chart_df["물섭취(컵)"] = pd.to_numeric(chart_df["물섭취(컵)"], errors="coerce").fillna(0)
-
-    return chart_df[["표시날짜", "물섭취(컵)"]].set_index("표시날짜")
-
-
-def get_pain_chart_data(df):
-    if len(df) == 0:
-        return pd.DataFrame()
-
-    pain_order = ["없음", "조금 있음", "심함"]
-    pain_counts = df["통증여부"].astype(str).value_counts()
-
-    rows = []
-    for pain in pain_order:
-        rows.append({"통증여부": pain, "횟수": int(pain_counts.get(pain, 0))})
-
-    result_df = pd.DataFrame(rows).set_index("통증여부")
-    return result_df
-
-
-def get_today_latest_record(df):
-    if len(df) == 0:
-        return None
-
-    df_copy = df.copy()
-    df_copy["날짜"] = df_copy["기록시각"].astype(str).str[:10]
-    today_df = df_copy[df_copy["날짜"] == get_today_string()].copy()
-
-    if len(today_df) == 0:
-        return None
-
-    today_df["정렬용시각"] = pd.to_datetime(today_df["기록시각"], errors="coerce")
-    today_df = today_df.sort_values(by="정렬용시각", ascending=False)
-
-    return today_df.iloc[0]
-
+if "edit_id" not in st.session_state:
+    st.session_state.edit_id = None
 
 st.title("요로케 테스트 앱")
 st.write("신장결석·요로결석 예방을 위한 테스트용 앱입니다.")
@@ -315,17 +342,6 @@ menu = st.radio(
     "원하는 메뉴를 선택하세요",
     ["홈", "오늘 체크", "음식 확인", "기록 보기"]
 )
-
-df_all = load_data()
-df_all = ensure_columns(df_all)
-today_done = has_today_record(df_all)
-today_record = get_today_latest_record(df_all)
-
-if "edit_mode" not in st.session_state:
-    st.session_state.edit_mode = False
-
-if "edit_index" not in st.session_state:
-    st.session_state.edit_index = 0
 
 if menu == "홈":
     st.subheader("홈")
@@ -341,7 +357,7 @@ if menu == "홈":
 
     if len(df_all) > 0:
         recent_df = get_latest_records(df_all, count=min(7, len(df_all)))
-        avg_water = pd.to_numeric(recent_df["물섭취(컵)"], errors="coerce").fillna(0).mean()
+        avg_water = pd.to_numeric(recent_df["물섭취컵"], errors="coerce").fillna(0).mean()
         avg_water_text = f"{avg_water:.1f}컵"
     else:
         avg_water_text = "0컵"
@@ -353,7 +369,7 @@ if menu == "홈":
 
     st.write("### 오늘 요약")
     if today_record is not None:
-        today_water = pd.to_numeric(today_record["물섭취(컵)"], errors="coerce")
+        today_water = pd.to_numeric(today_record["물섭취컵"], errors="coerce")
         if pd.isna(today_water):
             today_water = 0
 
@@ -370,27 +386,10 @@ if menu == "홈":
         tcol3.metric("오늘 짠 음식", today_salty)
         tcol4.metric("오늘 통증", today_pain)
 
-        st.write("### 오늘 최근 기록 1개")
         today_summary_df = pd.DataFrame([today_record]).drop(columns=["날짜", "정렬용시각"], errors="ignore")
         st.dataframe(today_summary_df, use_container_width=True)
     else:
         st.info("오늘 기록이 아직 없어 오늘 요약 카드가 비어 있습니다. 오늘 체크에서 먼저 기록해보세요.")
-
-    st.info("현재 가능한 기능: 오늘 체크, 음식 확인, 기록 보기, 기록 삭제, 기록 수정, 물 목표 표시, 기록 그래프")
-
-    st.write("### 빠른 안내")
-    st.write("1. 오늘 체크에서 물 섭취량과 상태를 입력합니다.")
-    st.write("2. 음식 확인에서 음식별 간단한 안내를 확인합니다.")
-    st.write("3. 기록 보기에서 최근 기록, 수정, 삭제, 그래프를 확인할 수 있습니다.")
-
-    st.write("### 최근 기록 요약")
-    if len(df_all) > 0:
-        latest_df = get_latest_records(df_all, count=3)
-        st.dataframe(latest_df, use_container_width=True)
-    else:
-        st.info("아직 저장된 기록이 없습니다. 오늘 체크부터 시작해보세요.")
-
-    st.caption("이 앱은 생활관리 참고용 테스트 앱입니다. 진단이나 치료를 대신하지 않습니다.")
 
 elif menu == "오늘 체크":
     st.subheader("오늘 체크")
@@ -416,36 +415,18 @@ elif menu == "오늘 체크":
 
     pain = st.radio("오늘 통증이 있었나요?", ["없음", "조금 있음", "심함"])
     urine = st.selectbox("오늘 소변 상태는 어땠나요?", ["맑음", "보통", "진함", "잘 모르겠음"])
-
     urine_count = st.number_input("오늘 소변은 몇 번 정도 봤나요?", min_value=0, max_value=30, value=0, step=1)
     sweat = st.radio("오늘 땀 배출은 어땠나요?", ["적음", "보통", "많음"])
     salty_food = st.radio("오늘 짠 음식을 먹었나요?", ["아니오", "조금", "예"])
-
     memo = st.text_area("메모가 있으면 적어주세요", placeholder="예: 커피를 많이 마셨음, 운동을 했음")
 
     if st.button("오늘 기록 저장"):
-        new_row = pd.DataFrame([{
-            "기록시각": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "물섭취(컵)": water,
-            "통증여부": pain,
-            "소변상태": urine,
-            "소변횟수": urine_count,
-            "땀배출": sweat,
-            "짠음식섭취": salty_food,
-            "메모": memo
-        }])
-
-        save_df = pd.concat([df_all, new_row], ignore_index=True)
-        save_data(save_df)
-
-        st.success("기록이 CSV 파일에 저장되었습니다.")
-        st.write(f"물 섭취량: {water}컵")
-        st.write(f"통증 여부: {pain}")
-        st.write(f"소변 상태: {urine}")
-        st.write(f"소변 횟수: {urine_count}회")
-        st.write(f"땀 배출: {sweat}")
-        st.write(f"짠 음식 섭취: {salty_food}")
-        st.write(f"메모: {memo}")
+        insert_record(
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            water, pain, urine, urine_count, sweat, salty_food, memo
+        )
+        st.success("기록이 SQLite DB에 저장되었습니다.")
+        st.rerun()
 
 elif menu == "음식 확인":
     st.subheader("음식 확인")
@@ -453,7 +434,6 @@ elif menu == "음식 확인":
     st.write("이제 비슷한 음식 이름도 어느 정도 알아듣습니다.")
 
     food = st.text_input("음식 이름을 입력하세요", placeholder="예: 아메리카노, 콜라, 소주, 국밥")
-    st.caption("예시 입력: 물 / 아메리카노 / 카페라떼 / 콜라 / 사이다 / 소주 / 와인 / 아몬드 / 호두 / 국밥 / 찌개 / 짬뽕")
 
     if food:
         canonical_food, original_food, matched_by_alias = normalize_food_name(food)
@@ -473,17 +453,13 @@ elif menu == "음식 확인":
 
             st.write(f"한 줄 팁: {result['tip']}")
         else:
-            st.info("아직 등록되지 않은 음식입니다. 테스트용 버전이라 음식 목록이 많지 않습니다.")
-            st.write("아래처럼 다시 입력해보세요: 아메리카노 / 콜라 / 소주 / 아몬드 / 국밥")
+            st.info("아직 등록되지 않은 음식입니다.")
 
 elif menu == "기록 보기":
     st.subheader("기록 보기")
 
     if len(df_all) > 0:
-        df_show = get_sorted_df_with_index(df_all)
-
-        st.write("저장된 기록 목록입니다. 최신 기록이 위에 보입니다.")
-        st.dataframe(df_show.drop(columns=["원본인덱스"]), use_container_width=True)
+        st.dataframe(df_all, use_container_width=True)
 
         st.write("### 기록 그래프")
         chart_col1, chart_col2 = st.columns(2)
@@ -493,143 +469,75 @@ elif menu == "기록 보기":
             water_chart_df = get_recent_water_chart_data(df_all, count=7)
             if len(water_chart_df) > 0:
                 st.bar_chart(water_chart_df)
-            else:
-                st.info("그래프를 그릴 기록이 아직 없습니다.")
 
         with chart_col2:
             st.write("통증 여부 요약")
             pain_chart_df = get_pain_chart_data(df_all)
             if len(pain_chart_df) > 0:
                 st.bar_chart(pain_chart_df)
-            else:
-                st.info("그래프를 그릴 기록이 아직 없습니다.")
 
         st.write("### 기록 수정")
-        edit_index = st.number_input(
-            "수정할 행 번호를 입력하세요 (맨 위부터 0, 1, 2...)",
-            min_value=0,
-            max_value=len(df_show) - 1,
-            value=st.session_state.edit_index,
-            step=1,
-            key="edit_index_input"
+        edit_id = st.number_input(
+            "수정할 id를 입력하세요",
+            min_value=1,
+            max_value=int(df_all["id"].max()),
+            value=1,
+            step=1
         )
-
-        st.session_state.edit_index = int(edit_index)
 
         if st.button("선택한 기록 불러오기"):
             st.session_state.edit_mode = True
+            st.session_state.edit_id = int(edit_id)
             st.rerun()
 
-        if st.session_state.edit_mode:
-            selected_row = df_show.iloc[st.session_state.edit_index]
+        if st.session_state.edit_mode and st.session_state.edit_id is not None:
+            selected_rows = df_all[df_all["id"] == st.session_state.edit_id]
 
-            st.info("아래 값을 수정한 뒤 '수정 내용 저장' 버튼을 누르세요.")
+            if len(selected_rows) > 0:
+                selected_row = selected_rows.iloc[0]
 
-            current_water = pd.to_numeric(selected_row["물섭취(컵)"], errors="coerce")
-            if pd.isna(current_water):
-                current_water = 0
+                current_water = pd.to_numeric(selected_row["물섭취컵"], errors="coerce")
+                if pd.isna(current_water):
+                    current_water = 0
 
-            current_urine_count = pd.to_numeric(selected_row["소변횟수"], errors="coerce")
-            if pd.isna(current_urine_count):
-                current_urine_count = 0
+                current_urine_count = pd.to_numeric(selected_row["소변횟수"], errors="coerce")
+                if pd.isna(current_urine_count):
+                    current_urine_count = 0
 
-            pain_options = ["없음", "조금 있음", "심함"]
-            urine_options = ["맑음", "보통", "진함", "잘 모르겠음"]
-            sweat_options = ["적음", "보통", "많음"]
-            salty_options = ["아니오", "조금", "예"]
+                pain_options = ["없음", "조금 있음", "심함"]
+                urine_options = ["맑음", "보통", "진함", "잘 모르겠음"]
+                sweat_options = ["적음", "보통", "많음"]
+                salty_options = ["아니오", "조금", "예"]
 
-            current_pain = str(selected_row["통증여부"])
-            current_urine = str(selected_row["소변상태"])
-            current_sweat = str(selected_row["땀배출"])
-            current_salty = str(selected_row["짠음식섭취"])
-            current_memo = str(selected_row["메모"])
+                edit_water = st.number_input("수정할 물 섭취량(컵)", min_value=0, max_value=30, value=int(current_water))
+                edit_pain = st.radio("수정할 통증 여부", pain_options, index=pain_options.index(str(selected_row["통증여부"])) if str(selected_row["통증여부"]) in pain_options else 0)
+                edit_urine = st.selectbox("수정할 소변 상태", urine_options, index=urine_options.index(str(selected_row["소변상태"])) if str(selected_row["소변상태"]) in urine_options else 0)
+                edit_urine_count = st.number_input("수정할 소변 횟수", min_value=0, max_value=30, value=int(current_urine_count))
+                edit_sweat = st.radio("수정할 땀 배출", sweat_options, index=sweat_options.index(str(selected_row["땀배출"])) if str(selected_row["땀배출"]) in sweat_options else 1)
+                edit_salty = st.radio("수정할 짠 음식 섭취", salty_options, index=salty_options.index(str(selected_row["짠음식섭취"])) if str(selected_row["짠음식섭취"]) in salty_options else 0)
+                edit_memo = st.text_area("수정할 메모", value="" if str(selected_row["메모"]) == "nan" else str(selected_row["메모"]))
 
-            edit_water = st.number_input(
-                "수정할 물 섭취량(컵)",
-                min_value=0,
-                max_value=30,
-                value=int(current_water),
-                key="edit_water"
-            )
+                if st.button("수정 내용 저장"):
+                    update_record(st.session_state.edit_id, edit_water, edit_pain, edit_urine, edit_urine_count, edit_sweat, edit_salty, edit_memo)
+                    st.session_state.edit_mode = False
+                    st.success("기록이 수정되었습니다.")
+                    st.rerun()
 
-            edit_pain = st.radio(
-                "수정할 통증 여부",
-                pain_options,
-                index=pain_options.index(current_pain) if current_pain in pain_options else 0,
-                key="edit_pain"
-            )
-
-            edit_urine = st.selectbox(
-                "수정할 소변 상태",
-                urine_options,
-                index=urine_options.index(current_urine) if current_urine in urine_options else 0,
-                key="edit_urine"
-            )
-
-            edit_urine_count = st.number_input(
-                "수정할 소변 횟수",
-                min_value=0,
-                max_value=30,
-                value=int(current_urine_count),
-                key="edit_urine_count"
-            )
-
-            edit_sweat = st.radio(
-                "수정할 땀 배출",
-                sweat_options,
-                index=sweat_options.index(current_sweat) if current_sweat in sweat_options else 1,
-                key="edit_sweat"
-            )
-
-            edit_salty = st.radio(
-                "수정할 짠 음식 섭취",
-                salty_options,
-                index=salty_options.index(current_salty) if current_salty in salty_options else 0,
-                key="edit_salty"
-            )
-
-            edit_memo = st.text_area(
-                "수정할 메모",
-                value="" if current_memo == "nan" else current_memo,
-                key="edit_memo"
-            )
-
-            if st.button("수정 내용 저장"):
-                real_index = int(selected_row["원본인덱스"])
-
-                df_all.loc[real_index, "물섭취(컵)"] = edit_water
-                df_all.loc[real_index, "통증여부"] = edit_pain
-                df_all.loc[real_index, "소변상태"] = edit_urine
-                df_all.loc[real_index, "소변횟수"] = edit_urine_count
-                df_all.loc[real_index, "땀배출"] = edit_sweat
-                df_all.loc[real_index, "짠음식섭취"] = edit_salty
-                df_all.loc[real_index, "메모"] = edit_memo
-
-                save_data(df_all)
-                st.session_state.edit_mode = False
-                st.success("기록이 수정되었습니다.")
-                st.rerun()
-
-            if st.button("수정 취소"):
-                st.session_state.edit_mode = False
-                st.rerun()
+                if st.button("수정 취소"):
+                    st.session_state.edit_mode = False
+                    st.rerun()
 
         st.write("### 기록 삭제")
-        delete_index = st.number_input(
-            "삭제할 행 번호를 입력하세요 (맨 위부터 0, 1, 2...)",
-            min_value=0,
-            max_value=len(df_show) - 1,
-            value=0,
-            step=1,
-            key="delete_index_input"
+        delete_id = st.number_input(
+            "삭제할 id를 입력하세요",
+            min_value=1,
+            max_value=int(df_all["id"].max()),
+            value=1,
+            step=1
         )
 
         if st.button("선택한 기록 삭제"):
-            row_to_delete = df_show.iloc[int(delete_index)]
-            real_index = int(row_to_delete["원본인덱스"])
-
-            df_all = df_all.drop(index=real_index).reset_index(drop=True)
-            save_data(df_all)
+            delete_record(int(delete_id))
             st.session_state.edit_mode = False
             st.success("선택한 기록이 삭제되었습니다.")
             st.rerun()
