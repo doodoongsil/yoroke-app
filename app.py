@@ -1388,6 +1388,7 @@ if menu == "홈":
     show_menu_flash("홈")
 
     # 1. 헤더 영역
+    st.markdown("---")
     draw_section_box("앱 소개")
     draw_helper_text("오늘 상태와 최근 7일 흐름을 한눈에 볼 수 있는 메인 화면입니다.")
 
